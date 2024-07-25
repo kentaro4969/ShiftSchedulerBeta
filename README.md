@@ -8,6 +8,10 @@ A VBA script for generating and managing shift schedules. This is a beta version
 - Manage and adjust shifts for employees
 - User-friendly interface for easy modifications
 
+## Version History
+### Beta 1.0
+- Initial release with basic shift scheduling features
+
 ## Getting Started
 
 To use this script, follow these steps:
