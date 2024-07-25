@@ -1,0 +1,15 @@
+# Ignore Excel temporary files
+~$*
+
+# Ignore all temporary files ending with .tmp
+*.tmp
+
+# Ignore VBA compiled files
+*.frx
+
+# Ignore backup files
+*.bak
+
+# Ignore hidden system files (Windows)
+Thumbs.db
+Desktop.ini
