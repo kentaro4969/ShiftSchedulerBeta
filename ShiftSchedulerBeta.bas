@@ -50,7 +50,7 @@ Sub GenerateShift()
     Dim availableStaff As Collection
     Dim staffIndex As Variant
     Dim logFile As String
-    Dim holidayDates() As Date
+    Dim holidayDates As Collection
     Dim holidayDate As Variant
 
     logFile = ThisWorkbook.Path & "\ShiftScheduleLog.txt"
@@ -169,21 +169,11 @@ NextStaff:
     ' 公休日を取得
     Print #1, "Step 4: Getting public holidays"
     On Error GoTo HolidayDataError
-    ReDim holidayDates(1 To 6)
+    Set holidayDates = New Collection
     For i = 1 To 6
         If IsDate(wsInput.Cells(2, i + 3).Value) Then
-            holidayDates(i) = wsInput.Cells(2, i + 3).Value
-            Print #1, "  Public Holiday: " & holidayDates(i)
-        Else
-            holidayDates(i) = 0
-        End If
-    Next i
-
-    ' 入力シートのD2:I2に公休日を追加
-    For i = 1 To 6
-        If IsDate(wsInput.Cells(2, i + 3).Value) Then
-            holidayDates(i) = wsInput.Cells(2, i + 3).Value
-            Print #1, "  Public Holiday: " & holidayDates(i)
+            holidayDates.Add wsInput.Cells(2, i + 3).Value
+            Print #1, "  Public Holiday: " & wsInput.Cells(2, i + 3).Value
         End If
     Next i
 
@@ -282,7 +272,39 @@ NextStaff:
     ReDim nightShiftDailyCount(1 To dates.count)
     ReDim offShiftDailyCount(1 To dates.count)
 
-    ' 1. 全ての日にリーダーを割り付ける
+    ' 属性4を平日の日勤に割り当てる
+    Print #1, "Step 10: Assigning attribute 4 to weekday day shifts"
+    For i = 1 To dates.count
+        currentDate = dates(i)
+        dayOfWeek = Weekday(currentDate, vbSunday)
+        If dayOfWeek >= vbMonday And dayOfWeek <= vbFriday Then
+            For j = 1 To UBound(staffNames)
+                If staffAttributes(j) = "4" And wsOutput.Cells(j + 2, i + 2).Value = "" And hoursWorked(j) + 8.5 <= staffMaxHours(j) And Not IsHoliday(currentDate, staffHolidays(j)) And Not IsHoliday(currentDate, holidayDates) Then
+                    Call AssignShift(wsOutput, j, i, dayShiftMark, 8.5, hoursWorked, staffShifts, staffNames, "day", staffAttributes, currentDate)
+                    dayShiftDailyCount(i) = dayShiftDailyCount(i) + 1
+                    Exit For
+                End If
+            Next j
+        End If
+    Next i
+    
+    ' 属性3もしくは4が必ず日勤にいるようにする
+    Print #1, "Step 11: Ensuring attribute 3 or 4 in day shifts"
+    For i = 1 To dates.count
+        currentDate = dates(i)
+        dayOfWeek = Weekday(currentDate, vbSunday)
+        If dayShiftDailyCount(i) = 0 Then
+            For j = 1 To UBound(staffNames)
+                If (staffAttributes(j) = "3" Or staffAttributes(j) = "4") And wsOutput.Cells(j + 2, i + 2).Value = "" And hoursWorked(j) + 8.5 <= staffMaxHours(j) And Not IsHoliday(currentDate, staffHolidays(j)) And Not IsHoliday(currentDate, holidayDates) Then
+                    Call AssignShift(wsOutput, j, i, dayShiftMark, 8.5, hoursWorked, staffShifts, staffNames, "day", staffAttributes, currentDate)
+                    dayShiftDailyCount(i) = dayShiftDailyCount(i) + 1
+                    Exit For
+                End If
+            Next j
+        End If
+    Next i
+
+    ' 1. 夜勤リーダーを割り当てる
     Dim dayShiftLeaderAssigned As Boolean
     Dim nightShiftLeaderAssigned As Boolean
     
@@ -330,10 +352,10 @@ NextStaff:
         Next j
 
         ' 勤務時間が少ないスタッフを優先するためにソート
-        Call SortStaffByHoursWorked(availableStaff, hoursWorked)
+        If availableStaff.count > 0 Then Call SortStaffByHoursWorked(availableStaff, hoursWorked)
 
         ' 利用可能なスタッフのリストをランダム化
-        Call ShuffleCollection(availableStaff)
+        If availableStaff.count > 0 Then Call ShuffleCollection(availableStaff)
         
         dayShiftAssigned = 0
         nightShiftAssigned = 0
@@ -345,7 +367,7 @@ NextStaff:
         ' 夜勤リーダーを割り当てる
         nightShiftLeaderAssigned = False
         For Each staffIndex In availableStaff
-            If Not nightShiftLeaderAssigned And staffAttributes(staffIndex) = "2" And wsOutput.Cells(staffIndex + 2, i + 2).Value = "" Then
+            If Not nightShiftLeaderAssigned And (staffAttributes(staffIndex) = "2" Or staffAttributes(staffIndex) = "3" Or staffAttributes(staffIndex) = "4") And wsOutput.Cells(staffIndex + 2, i + 2).Value = "" Then
                 If hoursWorked(staffIndex) + 16.5 <= staffMaxHours(staffIndex) And nightShiftCountWorked(staffIndex) < staffNightShiftMax(staffIndex) Then
                     ' ここで連続夜勤のチェックを緩和する
                     If CanAssignShift(wsOutput, staffIndex, i, "night", False, dayShiftMark, nightShiftMark) Then
@@ -368,7 +390,7 @@ NextStaff:
         ' 日勤リーダーを割り当てる
         dayShiftLeaderAssigned = False
         For Each staffIndex In availableStaff
-            If Not dayShiftLeaderAssigned And staffAttributes(staffIndex) = "2" And wsOutput.Cells(staffIndex + 2, i + 2).Value = "" Then
+            If Not dayShiftLeaderAssigned And (staffAttributes(staffIndex) = "2" Or staffAttributes(staffIndex) = "3" Or staffAttributes(staffIndex) = "4") And wsOutput.Cells(staffIndex + 2, i + 2).Value = "" Then
                 If hoursWorked(staffIndex) + 8.5 <= staffMaxHours(staffIndex) Then
                     If CanAssignShift(wsOutput, staffIndex, i, "day", True, dayShiftMark, nightShiftMark) Then
                         If Not HasIncompatibleStaff(wsOutput, staffCompatibility, staffIndex, i, "day", dayShiftMark, nightShiftMark) Then
@@ -416,11 +438,11 @@ NextStaff:
         Dim availableLeaders As Collection
         Set availableLeaders = New Collection
         
-        ' リーダー属性（1または2）を持つスタッフを優先的に追加
+        ' リーダー属性（2-4）を持つスタッフを優先的に追加
         For j = 1 To UBound(staffNames)
             If staffNames(j) <> "" Then
                 If wsOutput.Cells(j + 2, i + 2).Value = "" And hoursWorked(j) < staffMaxHours(j) Then
-                    If staffAttributes(j) = "1" Or staffAttributes(j) = "2" Then
+                    If staffAttributes(j) = "2" Or staffAttributes(j) = "3" Or staffAttributes(j) = "4" Then
                         availableLeaders.Add j
                     Else
                         availableStaff.Add j
@@ -430,12 +452,12 @@ NextStaff:
         Next j
 
         ' 勤務時間が少ないスタッフを優先するためにソート
-        Call SortStaffByHoursWorked(availableLeaders, hoursWorked)
-        Call SortStaffByHoursWorked(availableStaff, hoursWorked)
+        If availableLeaders.count > 0 Then Call SortStaffByHoursWorked(availableLeaders, hoursWorked)
+        If availableStaff.count > 0 Then Call SortStaffByHoursWorked(availableStaff, hoursWorked)
 
         ' 利用可能なスタッフのリストをランダム化
-        Call ShuffleCollection(availableLeaders)
-        Call ShuffleCollection(availableStaff)
+        If availableLeaders.count > 0 Then Call ShuffleCollection(availableLeaders)
+        If availableStaff.count > 0 Then Call ShuffleCollection(availableStaff)
         
         dayShiftAssigned = dayShiftDailyCount(i)
         nightShiftAssigned = nightShiftDailyCount(i) ' 既にリーダーシフトが割り当てられているため初期値を設定
@@ -570,61 +592,61 @@ NextStaff:
         Next j
 
         ' 勤務時間が少ないスタッフを優先するためにソート
-        Call SortStaffByHoursWorked(availableStaff, hoursWorked)
+        If availableStaff.count > 0 Then Call SortStaffByHoursWorked(availableStaff, hoursWorked)
 
         ' 利用可能なスタッフのリストをランダム化
-        Call ShuffleCollection(availableStaff)
+        If availableStaff.count > 0 Then Call ShuffleCollection(availableStaff)
         
         dayShiftAssigned = dayShiftDailyCount(i)
         nightShiftAssigned = nightShiftDailyCount(i)
         
-   ' 余剰シフトの割り振り
-For Each staffIndex In availableStaff
-    If wsOutput.Cells(staffIndex + 2, i + 2).Value = "" Then
-        If dayShiftAssigned < dayShiftCount And staffShifts(staffIndex).count < staffDayShiftMax(staffIndex) Then
-            If hoursWorked(staffIndex) + 8.5 <= staffMaxHours(staffIndex) Then
-                If CanAssignShift(wsOutput, staffIndex, i, "day", True, dayShiftMark, nightShiftMark) Then
-                    If Not HasIncompatibleStaff(wsOutput, staffCompatibility, staffIndex, i, "day", dayShiftMark, nightShiftMark) Then
-                        Call AssignShift(wsOutput, staffIndex, i, dayShiftMark, 8.5, hoursWorked, staffShifts, staffNames, "day", staffAttributes, currentDate)
-                        dayShiftAssigned = dayShiftAssigned + 1
-                        dayShiftDailyCount(i) = dayShiftDailyCount(i) + 1
-                    Else
-                        Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " has incompatible staff in day shift"
-                    End If
-                Else
-                    Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " cannot be assigned day shift due to max continuous day shift limit"
-                End If
-            Else
-                Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " cannot be assigned day shift due to max hours limit"
-            End If
-        ElseIf nightShiftAssigned < nightShiftCount And nightShiftCountWorked(staffIndex) < staffNightShiftMax(staffIndex) Then
-            If hoursWorked(staffIndex) + 16.5 <= staffMaxHours(staffIndex) Then
-                ' ここで連続夜勤のチェックを緩和する
-                If CanAssignShift(wsOutput, staffIndex, i, "night", False, dayShiftMark, nightShiftMark) Then
-                    If Not HasIncompatibleStaff(wsOutput, staffCompatibility, staffIndex, i, "night", dayShiftMark, nightShiftMark) Then
-                        Call AssignShift(wsOutput, staffIndex, i, nightShiftMark, 16.5, hoursWorked, staffShifts, staffNames, "night", staffAttributes, currentDate)
-                        nightShiftCountWorked(staffIndex) = nightShiftCountWorked(staffIndex) + 1
-                        nightShiftAssigned = nightShiftAssigned + 1
-                        nightShiftDailyCount(i) = nightShiftDailyCount(i) + 1
-                        If i + 1 <= dates.count Then
-                            If wsOutput.Cells(staffIndex + 2, i + 3).Value <> holidayMark Then wsOutput.Cells(staffIndex + 2, i + 3).Value = nightShiftAfterMark
-                        End If
-                        If i + 2 <= dates.count Then
-                            If wsOutput.Cells(staffIndex + 2, i + 4).Value <> holidayMark Then wsOutput.Cells(staffIndex + 2, i + 4).Value = holidayMark
+        ' 余剰シフトの割り振り
+        For Each staffIndex In availableStaff
+            If wsOutput.Cells(staffIndex + 2, i + 2).Value = "" Then
+                If dayShiftAssigned < dayShiftCount And staffShifts(staffIndex).count < staffDayShiftMax(staffIndex) Then
+                    If hoursWorked(staffIndex) + 8.5 <= staffMaxHours(staffIndex) Then
+                        If CanAssignShift(wsOutput, staffIndex, i, "day", True, dayShiftMark, nightShiftMark) Then
+                            If Not HasIncompatibleStaff(wsOutput, staffCompatibility, staffIndex, i, "day", dayShiftMark, nightShiftMark) Then
+                                Call AssignShift(wsOutput, staffIndex, i, dayShiftMark, 8.5, hoursWorked, staffShifts, staffNames, "day", staffAttributes, currentDate)
+                                dayShiftAssigned = dayShiftAssigned + 1
+                                dayShiftDailyCount(i) = dayShiftDailyCount(i) + 1
+                            Else
+                                Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " has incompatible staff in day shift"
+                            End If
+                        Else
+                            Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " cannot be assigned day shift due to max continuous day shift limit"
                         End If
                     Else
-                        Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " has incompatible staff in night shift"
+                        Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " cannot be assigned day shift due to max hours limit"
                     End If
-                Else
-                    Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " cannot be assigned night shift due to max continuous night shift limit"
+                ElseIf nightShiftAssigned < nightShiftCount And nightShiftCountWorked(staffIndex) < staffNightShiftMax(staffIndex) Then
+                    If hoursWorked(staffIndex) + 16.5 <= staffMaxHours(staffIndex) Then
+                        ' ここで連続夜勤のチェックを緩和する
+                        If CanAssignShift(wsOutput, staffIndex, i, "night", False, dayShiftMark, nightShiftMark) Then
+                            If Not HasIncompatibleStaff(wsOutput, staffCompatibility, staffIndex, i, "night", dayShiftMark, nightShiftMark) Then
+                                Call AssignShift(wsOutput, staffIndex, i, nightShiftMark, 16.5, hoursWorked, staffShifts, staffNames, "night", staffAttributes, currentDate)
+                                nightShiftCountWorked(staffIndex) = nightShiftCountWorked(staffIndex) + 1
+                                nightShiftAssigned = nightShiftAssigned + 1
+                                nightShiftDailyCount(i) = nightShiftDailyCount(i) + 1
+                                If i + 1 <= dates.count Then
+                                    If wsOutput.Cells(staffIndex + 2, i + 3).Value <> holidayMark Then wsOutput.Cells(staffIndex + 2, i + 3).Value = nightShiftAfterMark
+                                End If
+                                If i + 2 <= dates.count Then
+                                    If wsOutput.Cells(staffIndex + 2, i + 4).Value <> holidayMark Then wsOutput.Cells(staffIndex + 2, i + 4).Value = holidayMark
+                                End If
+                            Else
+                                Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " has incompatible staff in night shift"
+                            End If
+                        Else
+                            Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " cannot be assigned night shift due to max continuous night shift limit"
+                        End If
+                    Else
+                        Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " cannot be assigned night shift due to max hours limit"
+                    End If
                 End If
-            Else
-                Print #1, currentDate & ":  Staff " & staffNames(staffIndex) & " cannot be assigned night shift due to max hours limit"
             End If
-        End If
-    End If
-    If dayShiftAssigned >= dayShiftCount And nightShiftAssigned >= nightShiftCount Then Exit For
-Next staffIndex
+            If dayShiftAssigned >= dayShiftCount And nightShiftAssigned >= nightShiftCount Then Exit For
+        Next staffIndex
 
         ' デバッグメッセージを追加
         Print #1, currentDate & ": Additional Day Shift Assigned: " & dayShiftAssigned - dayShiftDailyCount(i) & " Additional Night Shift Assigned: " & nightShiftAssigned - nightShiftDailyCount(i)
@@ -719,43 +741,6 @@ ErrorHandler:
     Close #1
 End Sub
 
-Sub ShuffleCollection(col As Collection)
-    Dim i As Integer, j As Integer
-    Dim temp As Variant
-    Dim values() As Variant
-    Dim count As Integer
-
-    ' コレクションの要素を配列にコピー
-    count = col.count
-    ReDim values(1 To count)
-    For i = 1 To count
-        values(i) = col(i)
-    Next i
-
-    ' 配列の要素をシャッフル
-    For i = count To 2 Step -1
-        j = Int(Rnd() * i) + 1
-        temp = values(i)
-        values(i) = values(j)
-        values(j) = temp
-    Next i
-
-    ' 新しいコレクションを作成してシャッフルされた配列の要素を追加
-    Dim newCol As Collection
-    Set newCol = New Collection
-    For i = 1 To count
-        newCol.Add values(i)
-    Next i
-
-    ' 元のコレクションに新しいコレクションを置き換え
-    For i = 1 To count
-        col.Remove 1
-    Next i
-    For i = 1 To count
-        col.Add newCol(i)
-    Next i
-End Sub
-
 Sub AssignShift(ws As Worksheet, ByVal staffIndex As Integer, ByVal dateIndex As Integer, ByVal shiftMark As String, ByVal hours As Double, _
                 ByRef hoursWorked() As Double, ByRef staffShifts() As Collection, ByRef staffNames() As String, ByVal shiftType As String, _
                 ByRef staffAttributes() As String, ByVal currentDate As Date)
@@ -765,9 +750,9 @@ Sub AssignShift(ws As Worksheet, ByVal staffIndex As Integer, ByVal dateIndex As
     Print #1, currentDate & ":  Assigned " & shiftType & " shift to: " & staffNames(staffIndex) & ", Total Hours Worked: " & hoursWorked(staffIndex)
 
     ' リーダーのカウントを更新
-    If shiftType = "day" And staffAttributes(staffIndex) = "2" Then
+    If shiftType = "day" And (staffAttributes(staffIndex) = "2" Or staffAttributes(staffIndex) = "3" Or staffAttributes(staffIndex) = "4") Then
         ws.Cells(UBound(staffNames) + 6, dateIndex + 2).Value = ws.Cells(UBound(staffNames) + 6, dateIndex + 2).Value + 1
-    ElseIf shiftType = "night" And staffAttributes(staffIndex) = "2" Then
+    ElseIf shiftType = "night" And (staffAttributes(staffIndex) = "2" Or staffAttributes(staffIndex) = "3" Or staffAttributes(staffIndex) = "4") Then
         ws.Cells(UBound(staffNames) + 7, dateIndex + 2).Value = ws.Cells(UBound(staffNames) + 7, dateIndex + 2).Value + 1
     End If
 End Sub
@@ -872,8 +857,6 @@ Function CanAssignShift(ws As Worksheet, ByVal staffIndex As Integer, ByVal date
     End If
 End Function
 
-
-
 Sub SortStaffByHoursWorked(ByRef staffList As Collection, ByRef hoursWorked() As Double)
     Dim sortedStaff As New Collection
     Dim i As Integer, j As Integer
@@ -897,3 +880,51 @@ Sub SortStaffByHoursWorked(ByRef staffList As Collection, ByRef hoursWorked() As
     Next i
 End Sub
 
+Sub ShuffleCollection(col As Collection)
+    Dim i As Integer, j As Integer
+    Dim temp As Variant
+    Dim values() As Variant
+    Dim count As Integer
+
+    ' コレクションの要素を配列にコピー
+    count = col.count
+    If count = 0 Then Exit Sub ' 空のコレクションの場合は何もしない
+    ReDim values(1 To count)
+    For i = 1 To count
+        values(i) = col(i)
+    Next i
+
+    ' 配列の要素をシャッフル
+    For i = count To 2 Step -1
+        j = Int(Rnd() * i) + 1
+        temp = values(i)
+        values(i) = values(j)
+        values(j) = temp
+    Next i
+
+    ' 新しいコレクションを作成してシャッフルされた配列の要素を追加
+    Dim newCol As Collection
+    Set newCol = New Collection
+    For i = 1 To count
+        newCol.Add values(i)
+    Next i
+
+    ' 元のコレクションに新しいコレクションを置き換え
+    For i = 1 To count
+        col.Remove 1
+    Next i
+    For i = 1 To count
+        col.Add newCol(i)
+    Next i
+End Sub
+
+Function IsHoliday(currentDate As Date, holidays As Collection) As Boolean
+    Dim holidayDate As Variant
+    IsHoliday = False
+    For Each holidayDate In holidays
+        If holidayDate = currentDate Then
+            IsHoliday = True
+            Exit Function
+        End If
+    Next holidayDate
+End Function
