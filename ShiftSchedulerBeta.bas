@@ -1,5 +1,5 @@
 ' ShiftSchedulerBeta.bas
-' Version: Beta1.0
+' Version: Beta1.2
 ' Author: Kentaro Nakamura
 ' License: Non-Commercial Use Only
 ' 
